@@ -1,0 +1,160 @@
+---
+- name: Install YugabyteDB prerequisites and binaries
+  hosts: yugabyte_nodes
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - unzip
+          - tar
+        state: present
+        update_cache: true
+
+    - name: Ensure Yugabyte install directory exists
+      ansible.builtin.file:
+        path: "{{ yugabyte_install_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download YugabyteDB archive
+      ansible.builtin.get_url:
+        url: "{{ yugabyte_download_url }}"
+        dest: "/tmp/{{ yugabyte_archive }}"
+        mode: "0644"
+
+    - name: Extract YugabyteDB archive
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ yugabyte_archive }}"
+        dest: "{{ yugabyte_install_root }}"
+        remote_src: true
+        creates: "{{ yugabyte_home }}/bin/yugabyted"
+
+    - name: Run Yugabyte post install
+      ansible.builtin.command:
+        cmd: "{{ yugabyte_home }}/bin/post_install.sh"
+      changed_when: false
+
+    - name: Ensure data and certificate directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ yb_data_dir }}"
+        - "{{ yb_certs_dir }}"
+
+- name: Generate and collect server certificates on master node
+  hosts: yugabyte_master
+  become: true
+
+  tasks:
+    - name: Generate Yugabyte server certificates on master
+      ansible.builtin.command:
+        cmd: >-
+          {{ yugabyte_home }}/bin/yugabyted cert generate_server_certs
+          --base_dir={{ yb_certs_dir }}
+          --hostnames={{ node_hostnames }}
+      args:
+        creates: "{{ cert_output_dir }}/ca.crt"
+
+    - name: Create compressed archive of generated certificates
+      ansible.builtin.archive:
+        path: "{{ cert_output_dir }}/"
+        dest: /tmp/yb-certs.tar.gz
+        format: gz
+
+    - name: Pull certificate archive to Ansible controller
+      ansible.builtin.fetch:
+        src: /tmp/yb-certs.tar.gz
+        dest: /tmp/yb-certs.tar.gz
+        flat: true
+
+- name: Distribute certificates to all nodes
+  hosts: yugabyte_nodes
+  become: true
+
+  tasks:
+    - name: Copy certificate archive to node
+      ansible.builtin.copy:
+        src: /tmp/yb-certs.tar.gz
+        dest: /tmp/yb-certs.tar.gz
+        mode: "0644"
+
+    - name: Ensure cert destination exists
+      ansible.builtin.file:
+        path: "{{ yb_certs_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Unarchive certificates into Yugabyte cert directory
+      ansible.builtin.unarchive:
+        src: /tmp/yb-certs.tar.gz
+        dest: "{{ yb_certs_dir }}"
+        remote_src: true
+
+- name: Start secure YugabyteDB master
+  hosts: yugabyte_master
+  become: true
+
+  tasks:
+    - name: Stop yugabyted if already running on master
+      ansible.builtin.command:
+        cmd: "{{ yugabyte_home }}/bin/yugabyted stop --base_dir={{ yb_data_dir }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Start secure master node
+      ansible.builtin.command:
+        argv:
+          - "{{ yugabyte_home }}/bin/yugabyted"
+          - start
+          - --secure
+          - "--advertise_address={{ inventory_hostname }}"
+          - "--base_dir={{ yb_data_dir }}"
+          - --fault_tolerance=zone
+          - "--master_flags={{ master_flags }}"
+          - "--tserver_flags={{ tserver_flags }}"
+
+- name: Start secure YugabyteDB replicas
+  hosts: yugabyte_replicas
+  become: true
+
+  tasks:
+    - name: Stop yugabyted if already running on replicas
+      ansible.builtin.command:
+        cmd: "{{ yugabyte_home }}/bin/yugabyted stop --base_dir={{ yb_data_dir }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Start secure replica nodes and join master
+      ansible.builtin.command:
+        argv:
+          - "{{ yugabyte_home }}/bin/yugabyted"
+          - start
+          - --secure
+          - "--advertise_address={{ inventory_hostname }}"
+          - "--base_dir={{ yb_data_dir }}"
+          - --fault_tolerance=zone
+          - "--join={{ master_ip }}"
+          - "--master_flags={{ master_flags }}"
+          - "--tserver_flags={{ tserver_flags }}"
+
+- name: Verify YugabyteDB status on all nodes
+  hosts: yugabyte_nodes
+  become: true
+
+  tasks:
+    - name: Check yugabyted status
+      ansible.builtin.command:
+        cmd: "{{ yugabyte_home }}/bin/yugabyted status --base_dir={{ yb_data_dir }}"
+      register: yb_status
+      changed_when: false
+
+    - name: Print status output
+      ansible.builtin.debug:
+        var: yb_status.stdout_lines
