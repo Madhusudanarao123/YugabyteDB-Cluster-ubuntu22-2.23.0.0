@@ -74,3 +74,18 @@ SSL certificates must be set up before cluster configuration.
 Use --join only when starting a replica node during cluster setup.
 Use master/tserver flags to enforce SSL and certificate use.
 The cluster will show all three nodes only after all have joined with the master.
+
+## Ansible automation (SSL enabled)
+
+Use the ready-to-test Ansible files under `ansible/`:
+
+- `ansible/inventory.ini`
+- `ansible/group_vars/all.yml`
+- `ansible/install_yugabyte_ssl.yml`
+
+Run:
+
+```bash
+ansible-playbook --syntax-check -i ansible/inventory.ini ansible/install_yugabyte_ssl.yml
+ansible-playbook -i ansible/inventory.ini ansible/install_yugabyte_ssl.yml
+```

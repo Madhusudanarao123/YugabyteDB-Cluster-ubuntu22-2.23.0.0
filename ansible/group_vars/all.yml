@@ -1,0 +1,25 @@
+---
+yugabyte_version: "2.23.0.0"
+yugabyte_build: "b710"
+yugabyte_archive: "yugabyte-{{ yugabyte_version }}-{{ yugabyte_build }}-linux-x86_64.tar.gz"
+yugabyte_download_url: "https://downloads.yugabyte.com/releases/{{ yugabyte_version }}/{{ yugabyte_archive }}"
+
+yugabyte_install_root: "/opt"
+yugabyte_home: "{{ yugabyte_install_root }}/yugabyte-{{ yugabyte_version }}"
+yb_data_dir: "/DISK01/yugadata"
+yb_certs_dir: "{{ yb_data_dir }}/certs"
+cert_output_dir: "{{ yb_certs_dir }}/generate_server_certs"
+
+master_ip: "{{ groups['yugabyte_master'][0] }}"
+node_hostnames: "{{ groups['yugabyte_nodes'] | join(',') }}"
+
+master_flags: >-
+  use_node_to_node_encryption=true,
+  use_client_to_server_encryption=true,
+  certs_dir={{ yb_certs_dir }}
+
+tserver_flags: >-
+  use_node_to_node_encryption=true,
+  use_client_to_server_encryption=true,
+  certs_dir={{ yb_certs_dir }},
+  ysql_hba_conf_csv={hostssl all all all md5 clientcert=1}
